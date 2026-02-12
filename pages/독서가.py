@@ -12,7 +12,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 
 # =========================================================
-# 0) 임계값(요청 반영)
+# 0) 임계값
 # =========================================================
 REQUIRED_TITLE_THRESHOLD = 0.80
 REQUIRED_AUTHOR_THRESHOLD = 0.60
@@ -20,11 +20,9 @@ DUP_TITLE_THRESHOLD = 0.80
 DUP_AUTHOR_THRESHOLD = 0.60
 
 # =========================================================
-# 1) 페이지 설정(요청 1 반영)
+# 1) 페이지 설정
 # =========================================================
 APP_TITLE = "📚 독서가"
-INTERNAL_KEY = "독서활동상황_충족_여부_판단"  # 파일명 등에만 사용
-
 st.set_page_config(page_title="독서가", page_icon="📚", layout="wide")
 st.title(APP_TITLE)
 st.caption("독서활동상황 엑셀을 업로드하면 학기별 충족 여부와 총 충족 여부를 산출합니다.")
@@ -36,14 +34,14 @@ st.info(
 )
 
 # =========================================================
-# 2) 내장 필독서 경로(레포 루트 기준)
+# 2) 내장 필독서 경로
 # =========================================================
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_2024_PATH = PROJECT_ROOT / "data" / "required_books" / "필독서_2024.xlsx"
 REQUIRED_2025_PATH = PROJECT_ROOT / "data" / "required_books" / "필독서_2025.xlsx"
 
 # =========================================================
-# 3) 유틸 함수
+# 3) 유틸
 # =========================================================
 def _normalize_text(s: str) -> str:
     if s is None:
@@ -450,36 +448,61 @@ def _set_books_cell(ws, row_idx: int, col_idx: int, books: List[Tuple[str, str, 
         ws.cell(row=row_idx, column=col_idx).value = ", ".join(items)
 
 
+def _sem_num(s: str) -> Optional[int]:
+    nums = re.findall(r"\d+", str(s))
+    if not nums:
+        return None
+    n = int(nums[0])
+    return n if n in [1, 2] else None
+
+
+def _row_semkey(row: dict, base_year: Optional[int], next_year: Optional[int]) -> Optional[str]:
+    y = _safe_year_int(row.get("학년도"))
+    s = _sem_num(row.get("학기"))
+    if y is None or s is None or base_year is None:
+        return None
+    if y == base_year:
+        return f"1{s}"
+    if next_year is not None and y == next_year:
+        return f"2{s}"
+    return None
+
+
 # =========================================================
-# 4) 업로드 UI
+# 4) 업로드/실행 UI
 # =========================================================
 reading_file = st.file_uploader("독서활동상황 엑셀 업로드 (.xlsx)", type=["xlsx"], key="reading_file")
 run = st.button("✅ 충족 여부 판단 실행", type="primary", use_container_width=True)
 
-# =========================================================
-# 5) 버튼 1회성 문제 해결(요청 2 반영): 결과를 session_state에 저장
-# =========================================================
+# 세션 상태
 if "analysis" not in st.session_state:
     st.session_state.analysis = None
 if "analysis_id" not in st.session_state:
     st.session_state.analysis_id = None
+if "excel_bytes" not in st.session_state:
+    st.session_state.excel_bytes = None
+if "excel_name" not in st.session_state:
+    st.session_state.excel_name = None
+if "excel_id" not in st.session_state:
+    st.session_state.excel_id = None
 
 current_id = None
 if reading_file is not None:
     current_id = f"{getattr(reading_file, 'name', '')}:{getattr(reading_file, 'size', '')}"
 
-# 업로드 파일이 바뀌면(분석 결과와 불일치 방지) 결과 초기화
+# 업로드 파일이 바뀌면 결과 초기화
 if st.session_state.analysis is not None and current_id and st.session_state.analysis_id != current_id:
     st.session_state.analysis = None
     st.session_state.analysis_id = None
+    st.session_state.excel_bytes = None
+    st.session_state.excel_name = None
+    st.session_state.excel_id = None
     for k in ["cb_11", "cb_12", "cb_21", "cb_22", "cb_init_for_id"]:
         if k in st.session_state:
             del st.session_state[k]
     st.info("업로드 파일이 변경되었습니다. 실행 버튼을 다시 눌러 분석을 갱신해 주세요.")
 
-# =========================================================
-# 6) 분석 실행(버튼 눌렀을 때만 계산)
-# =========================================================
+
 def _analyze(uploaded) -> Dict[str, object]:
     filename = getattr(uploaded, "name", "")
     grade, cls, gc_text_raw = _extract_grade_class_from_filename_with_raw(filename)
@@ -679,11 +702,7 @@ def _analyze(uploaded) -> Dict[str, object]:
             }
         )
 
-    return {
-        "gc_text": gc_text,
-        "output_rows": output_rows,
-        "rich_text": RICH_TEXT_AVAILABLE,
-    }
+    return {"gc_text": gc_text, "output_rows": output_rows}
 
 
 if run:
@@ -691,24 +710,29 @@ if run:
         st.error("독서활동상황 파일을 업로드해 주세요.")
         st.stop()
 
+    prog = st.progress(0, text="분석 준비 중...")
     try:
-        result = _analyze(reading_file)
+        with st.spinner("분석을 진행하고 있습니다..."):
+            prog.progress(10, text="엑셀 파일 읽는 중...")
+            result = _analyze(reading_file)
+            prog.progress(80, text="결과 정리 중...")
+
         st.session_state.analysis = result
         st.session_state.analysis_id = current_id
-
-        # 체크박스 초기화(새 분석 결과 기준으로 기본값 재설정)
+        st.session_state.excel_bytes = None
+        st.session_state.excel_name = None
+        st.session_state.excel_id = None
         for k in ["cb_11", "cb_12", "cb_21", "cb_22", "cb_init_for_id"]:
             if k in st.session_state:
                 del st.session_state[k]
 
-        st.success("분석이 완료되었습니다. 아래에서 학기 기준을 조정할 수 있습니다.")
+        prog.progress(100, text="완료")
+        st.success("분석이 완료되었습니다. 아래에서 학기 기준을 조정해 주세요.")
     except Exception as e:
+        prog.empty()
         st.error(f"분석 중 오류: {e}")
         st.stop()
 
-# =========================================================
-# 7) 결과 렌더링(버튼을 다시 누르지 않아도 유지됨)  ← 요청 2 핵심
-# =========================================================
 analysis = st.session_state.analysis
 if analysis is None:
     st.stop()
@@ -716,31 +740,19 @@ if analysis is None:
 output_rows: List[dict] = analysis["output_rows"]  # type: ignore
 gc_text: str = analysis["gc_text"]  # type: ignore
 
-def _sem_num(s: str) -> Optional[int]:
-    nums = re.findall(r"\d+", str(s))
-    if not nums:
-        return None
-    n = int(nums[0])
-    return n if n in [1, 2] else None
-
+# =========================================================
+# 5) 학기 선택(체크 해제 시 '-' 처리 + 상세/엑셀도 동일 반영)
+# =========================================================
 years_all = sorted({y for y in (_safe_year_int(r["학년도"]) for r in output_rows) if y is not None})
 base_year = years_all[0] if years_all else None
 next_year = years_all[1] if len(years_all) >= 2 else None
-has_second_grade = True if next_year is not None else False
 
-# 파일에 존재하는 학기 수집: "11","12","21","22"
 available_keys: set = set()
 for r in output_rows:
-    y = _safe_year_int(r["학년도"])
-    s = _sem_num(r["학기"])
-    if y is None or s is None:
-        continue
-    if base_year is not None and y == base_year:
-        available_keys.add(f"1{s}")
-    elif has_second_grade and next_year is not None and y == next_year:
-        available_keys.add(f"2{s}")
+    k = _row_semkey(r, base_year, next_year)
+    if k:
+        available_keys.add(k)
 
-# 체크박스 기본값 1회 초기화
 init_key = st.session_state.analysis_id
 if st.session_state.get("cb_init_for_id") != init_key:
     st.session_state["cb_11"] = ("11" in available_keys)
@@ -750,15 +762,15 @@ if st.session_state.get("cb_init_for_id") != init_key:
     st.session_state["cb_init_for_id"] = init_key
 
 st.subheader("총 충족 기준(학기) 선택")
-st.caption("체크를 바꿔도 결과 화면이 사라지지 않으며, 총 충족 여부만 재계산됩니다.")
+st.caption("체크 해제한 학기는 요약에서 '-'로 표시되며, 총 충족 여부 계산 및 상세/엑셀에서 제외됩니다.")
 
 colA, colB = st.columns(2)
 with colA:
-    st.checkbox("1학년 1학기", key="cb_11")
-    st.checkbox("1학년 2학기", key="cb_12")
+    st.checkbox("1학년 1학기", key="cb_11", disabled=("11" not in available_keys))
+    st.checkbox("1학년 2학기", key="cb_12", disabled=("12" not in available_keys))
 with colB:
-    st.checkbox("2학년 1학기", key="cb_21")
-    st.checkbox("2학년 2학기", key="cb_22")
+    st.checkbox("2학년 1학기", key="cb_21", disabled=("21" not in available_keys))
+    st.checkbox("2학년 2학기", key="cb_22", disabled=("22" not in available_keys))
 
 selected_keys: List[str] = []
 if st.session_state.get("cb_11"):
@@ -770,14 +782,26 @@ if st.session_state.get("cb_21"):
 if st.session_state.get("cb_22"):
     selected_keys.append("22")
 
+# 선택이 바뀌면(다운로드 파일 불일치 방지) 생성된 엑셀 캐시 제거
+excel_id = f"{st.session_state.analysis_id}:{','.join(selected_keys)}"
+if st.session_state.excel_id is not None and st.session_state.excel_id != excel_id:
+    st.session_state.excel_bytes = None
+    st.session_state.excel_name = None
+    st.session_state.excel_id = None
+    st.info("학기 선택이 변경되었습니다. 엑셀 파일은 다시 생성해 주세요.")
+
 if len(selected_keys) == 0:
-    st.warning("총 충족 여부 기준 학기가 선택되지 않았습니다. 총 충족 여부는 '판정 보류'로 표시됩니다.")
+    st.warning("선택된 학기가 없습니다. 총 충족 여부는 '판정 보류'로 표시되며, 상세/엑셀은 비어 있게 됩니다.")
 
-# 학생별 학기별 O/X/- 구성
+# =========================================================
+# 6) 요약 생성 (체크 해제 학기 = '-', 선택 학기만 O/X)
+# =========================================================
+def _default_value_for_sem(k: str) -> str:
+    if k not in selected_keys:
+        return "-"  # 선택 안 함
+    return "X"  # 선택함(파일에 존재하는 학기만 선택 가능하도록 UI에서 제어)
+
 summary_map: Dict[str, dict] = {}
-
-def _default_sem_value(k: str) -> str:
-    return "X" if k in available_keys else "-"
 
 for r in output_rows:
     sid = r["학번"]
@@ -786,22 +810,18 @@ for r in output_rows:
         summary_map[key] = {
             "학번": sid,
             "이름": r["이름"],
-            "11": _default_sem_value("11"),
-            "12": _default_sem_value("12"),
-            "21": _default_sem_value("21"),
-            "22": _default_sem_value("22"),
+            "11": _default_value_for_sem("11"),
+            "12": _default_value_for_sem("12"),
+            "21": _default_value_for_sem("21"),
+            "22": _default_value_for_sem("22"),
         }
 
-    y = _safe_year_int(r["학년도"])
-    s = _sem_num(r["학기"])
-    if y is None or s is None:
-        continue
+    semkey = _row_semkey(r, base_year, next_year)
+    if not semkey or semkey not in selected_keys:
+        continue  # 선택되지 않은 학기는 기록이 있어도 '-' 유지
 
     mark = "O" if r["충족 여부"] == "충족" else "X"
-    if base_year is not None and y == base_year:
-        summary_map[key][f"1{s}"] = mark
-    elif has_second_grade and next_year is not None and y == next_year:
-        summary_map[key][f"2{s}"] = mark
+    summary_map[key][semkey] = mark
 
 def _sort_key_summary(item: dict):
     sid = item.get("학번", "") or ""
@@ -816,8 +836,7 @@ for i, row in enumerate(summary_rows, start=1):
     else:
         ok = True
         for k in selected_keys:
-            v = row.get(k, "-")
-            if v != "O":
+            if row.get(k, "-") != "O":
                 ok = False
                 break
         total = "충족" if ok else "미충족"
@@ -849,6 +868,17 @@ df_summary = pd.DataFrame(
     ],
 )
 
+# =========================================================
+# 7) 상세(선택 학기만 남김)
+# =========================================================
+detail_rows_selected = []
+for r in output_rows:
+    semkey = _row_semkey(r, base_year, next_year)
+    if semkey and semkey in selected_keys:
+        detail_rows_selected.append(r)
+
+detail_rows_selected = sorted(detail_rows_selected, key=lambda x: (x.get("학번", ""), _semester_sort_key(x.get("학년도", ""), x.get("학기", "")), x.get("이름", "")))
+
 st.subheader("요약 미리보기")
 st.dataframe(df_summary.head(20), use_container_width=True)
 
@@ -866,97 +896,120 @@ df_detail_preview = pd.DataFrame(
             "충족 여부": r["충족 여부"],
             "비고": r["비고"],
         }
-        for i, r in enumerate(output_rows, start=1)
+        for i, r in enumerate(detail_rows_selected, start=1)
     ]
 )
 st.dataframe(df_detail_preview.head(20), use_container_width=True)
 
-# =====================================================
-# 엑셀 생성(요약 시트가 체크박스 선택 결과를 반영하도록 매 실행마다 재생성)
-# =====================================================
-wb = Workbook()
+# =========================================================
+# 8) 엑셀 생성/다운로드: 생성 버튼 + 스피너/진행바 제공 (요청 2)
+# =========================================================
+def _build_excel_bytes(df_sum: pd.DataFrame, detail_rows: List[dict]) -> Tuple[bytes, str]:
+    wb = Workbook()
 
-ws_sum = wb.active
-ws_sum.title = "요약"
-sum_headers = list(df_summary.columns)
-ws_sum.append(sum_headers)
-for _, row in df_summary.iterrows():
-    ws_sum.append([row[h] for h in sum_headers])
+    # 요약
+    ws_sum = wb.active
+    ws_sum.title = "요약"
+    sum_headers = list(df_sum.columns)
+    ws_sum.append(sum_headers)
+    for _, row in df_sum.iterrows():
+        ws_sum.append([row[h] for h in sum_headers])
 
-header_font = Font(bold=True)
-for c in range(1, len(sum_headers) + 1):
-    cell = ws_sum.cell(row=1, column=c)
-    cell.font = header_font
-    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    header_font = Font(bold=True)
+    for c in range(1, len(sum_headers) + 1):
+        cell = ws_sum.cell(row=1, column=c)
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-ws_sum.column_dimensions["A"].width = 6
-ws_sum.column_dimensions["B"].width = 10
-ws_sum.column_dimensions["C"].width = 10
-ws_sum.column_dimensions["D"].width = 18
-ws_sum.column_dimensions["E"].width = 18
-ws_sum.column_dimensions["F"].width = 18
-ws_sum.column_dimensions["G"].width = 18
-ws_sum.column_dimensions["H"].width = 12
+    ws_sum.column_dimensions["A"].width = 6
+    ws_sum.column_dimensions["B"].width = 10
+    ws_sum.column_dimensions["C"].width = 10
+    ws_sum.column_dimensions["D"].width = 18
+    ws_sum.column_dimensions["E"].width = 18
+    ws_sum.column_dimensions["F"].width = 18
+    ws_sum.column_dimensions["G"].width = 18
+    ws_sum.column_dimensions["H"].width = 12
 
-ws = wb.create_sheet(title="상세")
-detail_headers = ["연번", "학번", "이름", "학년도", "학기", "도서명", "총권수", "필독서 권수", "충족 여부", "비고"]
-ws.append(detail_headers)
+    # 상세(선택 학기만)
+    ws = wb.create_sheet(title="상세")
+    detail_headers = ["연번", "학번", "이름", "학년도", "학기", "도서명", "총권수", "필독서 권수", "충족 여부", "비고"]
+    ws.append(detail_headers)
 
-for idx, r in enumerate(output_rows, start=2):
-    ws.append(
-        [
-            idx - 1,
-            r["학번"],
-            r["이름"],
-            r["학년도"],
-            r["학기"],
-            "",
-            r["총권수"],
-            r["필독서 권수"],
-            r["충족 여부"],
-            r["비고"],
-        ]
+    for idx, r in enumerate(detail_rows, start=2):
+        ws.append(
+            [
+                idx - 1,
+                r["학번"],
+                r["이름"],
+                r["학년도"],
+                r["학기"],
+                "",
+                r["총권수"],
+                r["필독서 권수"],
+                r["충족 여부"],
+                r["비고"],
+            ]
+        )
+        _set_books_cell(ws, row_idx=idx, col_idx=6, books=r["도서목록_표시"])
+
+        note_cell = ws.cell(row=idx, column=10)
+        note_cell.alignment = Alignment(wrap_text=True, vertical="top")
+        if "중복" in str(r.get("비고", "") or ""):
+            note_cell.font = Font(color="FF0000")
+
+    for c in range(1, len(detail_headers) + 1):
+        cell = ws.cell(row=1, column=c)
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    ws.column_dimensions["A"].width = 6
+    ws.column_dimensions["B"].width = 10
+    ws.column_dimensions["C"].width = 10
+    ws.column_dimensions["D"].width = 10
+    ws.column_dimensions["E"].width = 8
+    ws.column_dimensions["F"].width = 70
+    ws.column_dimensions["G"].width = 8
+    ws.column_dimensions["H"].width = 12
+    ws.column_dimensions["I"].width = 10
+    ws.column_dimensions["J"].width = 55
+
+    for rr in range(2, ws.max_row + 1):
+        ws.cell(row=rr, column=6).alignment = Alignment(wrap_text=True, vertical="top")
+
+    out = BytesIO()
+    wb.save(out)
+    out.seek(0)
+
+    sem_tag = "none" if len(selected_keys) == 0 else "-".join(selected_keys)
+    filename = f"{gc_text}_독서가_결과_{sem_tag}.xlsx"
+    return out.getvalue(), filename
+
+
+st.divider()
+st.subheader("엑셀 다운로드")
+
+create_excel = st.button("📦 엑셀 파일 생성", use_container_width=True)
+if create_excel:
+    p = st.progress(0, text="엑셀 생성 준비 중...")
+    with st.spinner("엑셀 파일을 생성하고 있습니다..."):
+        p.progress(20, text="요약 시트 구성 중...")
+        p.progress(50, text="상세 시트 구성 중...")
+        # (선택 학기만 반영)
+        bytes_data, fname = _build_excel_bytes(df_summary, detail_rows_selected)
+        p.progress(100, text="완료")
+    st.session_state.excel_bytes = bytes_data
+    st.session_state.excel_name = fname
+    st.session_state.excel_id = excel_id
+    st.success("엑셀 파일 생성이 완료되었습니다. 아래 버튼으로 다운로드해 주세요.")
+
+if st.session_state.excel_bytes is not None:
+    st.download_button(
+        label="📥 결과 엑셀 다운로드",
+        data=st.session_state.excel_bytes,
+        file_name=st.session_state.excel_name,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
     )
-
-    _set_books_cell(ws, row_idx=idx, col_idx=6, books=r["도서목록_표시"])
-
-    note_cell = ws.cell(row=idx, column=10)
-    note_cell.alignment = Alignment(wrap_text=True, vertical="top")
-    note_text = str(r.get("비고", "") or "")
-    if "중복" in note_text:
-        note_cell.font = Font(color="FF0000")
-
-for c in range(1, len(detail_headers) + 1):
-    cell = ws.cell(row=1, column=c)
-    cell.font = header_font
-    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-ws.column_dimensions["A"].width = 6
-ws.column_dimensions["B"].width = 10
-ws.column_dimensions["C"].width = 10
-ws.column_dimensions["D"].width = 10
-ws.column_dimensions["E"].width = 8
-ws.column_dimensions["F"].width = 70
-ws.column_dimensions["G"].width = 8
-ws.column_dimensions["H"].width = 12
-ws.column_dimensions["I"].width = 10
-ws.column_dimensions["J"].width = 55
-
-for rr in range(2, ws.max_row + 1):
-    ws.cell(row=rr, column=6).alignment = Alignment(wrap_text=True, vertical="top")
-
-output = BytesIO()
-wb.save(output)
-output.seek(0)
-
-out_filename = f"{gc_text}_독서가_결과.xlsx"
-st.download_button(
-    label="📥 결과 엑셀 다운로드",
-    data=output,
-    file_name=out_filename,
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    use_container_width=True,
-)
 
 if not RICH_TEXT_AVAILABLE:
     st.warning("현재 환경에서 '셀 내부 일부 굵게'가 제한되어, 필독서는 ★ 표시로 강조됩니다.")
