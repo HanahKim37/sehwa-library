@@ -1,4 +1,4 @@
-# pages/02_독서활동상황_충족_여부_판단.py
+# pages/02_독서가.py
 
 import re
 from io import BytesIO
@@ -12,19 +12,22 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 
 # =========================================================
-# 0) 임계값
+# 0) 임계값(요청 반영)
 # =========================================================
-REQUIRED_TITLE_THRESHOLD = 0.80  # 필독서 제목 유사도
-REQUIRED_AUTHOR_THRESHOLD = 0.60  # 필독서 저자 유사도
-DUP_TITLE_THRESHOLD = 0.80  # 중복(학생 전체) 제목 유사도
-DUP_AUTHOR_THRESHOLD = 0.60  # 중복(학생 전체) 저자 유사도
+REQUIRED_TITLE_THRESHOLD = 0.80
+REQUIRED_AUTHOR_THRESHOLD = 0.60
+DUP_TITLE_THRESHOLD = 0.80
+DUP_AUTHOR_THRESHOLD = 0.60
 
 # =========================================================
-# 1) 페이지 설정
+# 1) 페이지 설정(요청 1 반영)
 # =========================================================
-PAGE_TITLE = "독서활동상황_충족_여부_판단"
-st.set_page_config(page_title=PAGE_TITLE, layout="wide")
-st.title(PAGE_TITLE)
+APP_TITLE = "📚 독서가"
+INTERNAL_KEY = "독서활동상황_충족_여부_판단"  # 파일명 등에만 사용
+
+st.set_page_config(page_title="독서가", page_icon="📚", layout="wide")
+st.title(APP_TITLE)
+st.caption("독서활동상황 엑셀을 업로드하면 학기별 충족 여부와 총 충족 여부를 산출합니다.")
 
 st.info(
     "※ 독서활동상황 엑셀은 **한 반의 파일만** 업로드해 주세요.\n\n"
@@ -33,8 +36,7 @@ st.info(
 )
 
 # =========================================================
-# 2) 내장 필독서 경로 (레포 루트 기준으로 고정)
-#    - pages/ 아래 파일이라면 parents[1]이 루트가 됩니다.
+# 2) 내장 필독서 경로(레포 루트 기준)
 # =========================================================
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_2024_PATH = PROJECT_ROOT / "data" / "required_books" / "필독서_2024.xlsx"
@@ -44,7 +46,6 @@ REQUIRED_2025_PATH = PROJECT_ROOT / "data" / "required_books" / "필독서_2025.
 # 3) 유틸 함수
 # =========================================================
 def _normalize_text(s: str) -> str:
-    """비교용 정규화(공백 제거/기호 제거/대소문자 무시)."""
     if s is None:
         return ""
     s = str(s).strip().lower()
@@ -54,17 +55,11 @@ def _normalize_text(s: str) -> str:
 
 
 def _title_variants_norm(title: str) -> List[str]:
-    """
-    제목에서 비교용 변형 키를 여러 개 생성
-    - 원문 전체
-    - 괄호/대괄호/콜론/슬래시/대시 등 앞부분
-    """
     if title is None:
         return []
     t = str(title).strip()
     if not t:
         return []
-
     seps = ["(", "（", "[", "【", ":", "：", "/", "／", " - ", " – ", " — ", "-", "–", "—"]
     candidates = [t]
     for sep in seps:
@@ -80,18 +75,11 @@ def _title_variants_norm(title: str) -> List[str]:
 
 
 def _author_variants_norm(author: str) -> List[str]:
-    """
-    저자 표기 변형 키 생성(이니셜/성씨 중심 대응)
-    - 전체 정규화
-    - 성씨(마지막 토큰)
-    - (이니셜 + 성씨) 형태: 예) 'Raquel Jaramillo Palacio' -> 'rjpalacio'
-    """
     if author is None:
         return []
     a = str(author).strip()
     if not a:
         return []
-
     tokens = [t for t in re.split(r"\s+", a) if t.strip()]
     out: List[str] = []
 
@@ -161,7 +149,6 @@ def _pick_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
 
 
 def _extract_grade_class_from_filename_with_raw(filename: str) -> Tuple[Optional[int], Optional[int], Optional[str]]:
-    """파일명에서 '학년-반' 패턴 추출. 반환: (학년, 반, 원본표기 '2-10' 등)"""
     if not filename:
         return None, None, None
     m = re.search(r"(?<!\d)([1-3])\s*[-_ ]\s*(\d{1,2})(?!\d)", filename)
@@ -179,7 +166,6 @@ def _extract_grade_class_from_filename_with_raw(filename: str) -> Tuple[Optional
 
 
 def _parse_grade_class_from_sheet_top(df_raw: pd.DataFrame) -> Tuple[Optional[int], Optional[int]]:
-    """시트 상단에서 '○학년 ○반' 탐색."""
     max_r = min(20, df_raw.shape[0])
     max_c = min(10, df_raw.shape[1])
     pattern = re.compile(r"(\d)\s*학\s*년\D{0,10}?(\d{1,2})\s*반")
@@ -199,15 +185,9 @@ def _parse_grade_class_from_sheet_top(df_raw: pd.DataFrame) -> Tuple[Optional[in
 
 
 def _infer_academic_year_from_print_date(df_raw_top: pd.DataFrame) -> Optional[int]:
-    """
-    시트 상단에서 출력일(예: 2026.02.03.)을 찾아 학년도 추정
-    - 1~2월 출력: 학년도 = 출력연도 - 1
-    - 3~12월 출력: 학년도 = 출력연도
-    """
     date_pat = re.compile(r"(20\d{2})[.\-/]\s*(\d{1,2})[.\-/]\s*(\d{1,2})")
     max_r = min(30, df_raw_top.shape[0])
     max_c = min(20, df_raw_top.shape[1])
-
     for r in range(max_r):
         for c in range(max_c):
             v = df_raw_top.iat[r, c]
@@ -222,7 +202,6 @@ def _infer_academic_year_from_print_date(df_raw_top: pd.DataFrame) -> Optional[i
 
 
 def _find_header_row_for_reading(df_raw: pd.DataFrame) -> Optional[int]:
-    """독서활동상황 표 헤더 행(번호/독서활동상황 포함)을 찾습니다."""
     for r in range(min(80, df_raw.shape[0])):
         row_vals = [str(x).strip() for x in df_raw.iloc[r].tolist() if not pd.isna(x)]
         joined = " ".join(row_vals).replace(" ", "")
@@ -232,7 +211,6 @@ def _find_header_row_for_reading(df_raw: pd.DataFrame) -> Optional[int]:
 
 
 def _load_reading_table(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
-    """독서활동 파일에서 헤더 행을 자동 탐색 후 테이블을 로드합니다."""
     df_raw = xls.parse(sheet_name=sheet_name, header=None, dtype=str)
     header_row = _find_header_row_for_reading(df_raw)
     if header_row is None:
@@ -249,7 +227,6 @@ BOOK_PAIR_RE = re.compile(r"(?P<title>[^()]+?)\s*\(\s*(?P<author>[^()]+?)\s*\)")
 
 
 def _split_books(cell_text: str) -> List[Tuple[str, str]]:
-    """셀 전체에서 '도서명(저자)' 패턴을 모두 추출."""
     if cell_text is None or pd.isna(cell_text):
         return []
     text = str(cell_text).strip()
@@ -275,7 +252,6 @@ def _semester_sort_key(year: str, sem: str) -> Tuple[int, int]:
 
 
 def _find_req_header_row(df_raw: pd.DataFrame) -> Optional[int]:
-    """필독서 파일에서 '도서명' + ('저자' 또는 '저자명') 헤더 행을 탐색."""
     max_r = min(200, df_raw.shape[0])
     for r in range(max_r):
         row = df_raw.iloc[r].astype(str).fillna("").tolist()
@@ -287,10 +263,6 @@ def _find_req_header_row(df_raw: pd.DataFrame) -> Optional[int]:
 
 @st.cache_data(show_spinner=False)
 def _load_required_books_from_repo(xlsx_path: str) -> Dict[str, Tuple[str, str]]:
-    """
-    내장 필독서 xlsx 로드:
-    {정규화키(도서명|저자): (도서명, 저자)}
-    """
     p = Path(xlsx_path)
     if not p.exists():
         raise FileNotFoundError(f"필독서 파일을 찾을 수 없습니다: {p.resolve()}")
@@ -326,7 +298,6 @@ def _load_required_books_from_repo(xlsx_path: str) -> Dict[str, Tuple[str, str]]
         if not t or not a:
             continue
 
-        # 헤더 반복/구분행 제거
         t_ns = t.replace(" ", "")
         a_ns = a.replace(" ", "")
         if t_ns in ["도서명", "도서", "제목"] or a_ns in ["저자", "저자명", "지은이"]:
@@ -351,23 +322,15 @@ def _safe_year_int(x) -> Optional[int]:
 
 
 def _choose_required_map(year_value, req_2024_map, req_2025_map):
-    """
-    규칙:
-    - 학년도 == 2024 → 2024 목록
-    - 학년도 == 2025 이상 OR 인식 실패 → 2025 목록
-    """
     y = _safe_year_int(year_value)
     if y == 2024:
         return req_2024_map
-    if y is None:
-        return req_2025_map
-    if y >= 2025:
+    if y is None or y >= 2025:
         return req_2025_map
     return req_2024_map
 
 
 def _build_required_title_map(req_map: Dict[str, Tuple[str, str]]) -> Dict[str, Tuple[str, str]]:
-    """{정규화된 제목(여러 변형): (표준도서명, 표준저자명)}"""
     title_map: Dict[str, Tuple[str, str]] = {}
     for _, (t, a) in req_map.items():
         for nt in _title_variants_norm(t):
@@ -383,11 +346,6 @@ def _fuzzy_match_required_title_author(
     title_threshold: float = REQUIRED_TITLE_THRESHOLD,
     author_threshold: float = REQUIRED_AUTHOR_THRESHOLD,
 ) -> Optional[Tuple[str, Tuple[str, str], float, float]]:
-    """
-    필독서 퍼지 매칭:
-    - 제목 best >= title_threshold
-    - 저자 best >= author_threshold
-    """
     if not raw_title:
         return None
 
@@ -429,7 +387,6 @@ def _find_duplicate_against_seen(
     title_threshold: float = DUP_TITLE_THRESHOLD,
     author_threshold: float = DUP_AUTHOR_THRESHOLD,
 ) -> Optional[Tuple[dict, float, float]]:
-    """seen: [{'title':..., 'author':...}] 에 대해 유사중복 찾기"""
     best_item = None
     best_title = 0.0
     best_author = 0.0
@@ -456,22 +413,16 @@ def _find_duplicate_against_seen(
     return best_item, best_title, best_author
 
 
-# openpyxl rich text(셀 내부 부분 굵게) 가능 여부
+# openpyxl rich text 가능 여부
 RICH_TEXT_AVAILABLE = False
 try:
     from openpyxl.cell.rich_text import CellRichText, TextBlock, InlineFont  # type: ignore
-
     RICH_TEXT_AVAILABLE = True
 except Exception:
     RICH_TEXT_AVAILABLE = False
 
 
 def _set_books_cell(ws, row_idx: int, col_idx: int, books: List[Tuple[str, str, bool]]):
-    """
-    도서명 셀: '도서명(저자), 도서명(저자), ...' 형식
-    - rich text 가능하면 필독만 굵게
-    - 아니면 ★ 표시
-    """
     if not books:
         ws.cell(row=row_idx, column=col_idx).value = ""
         return
@@ -501,105 +452,93 @@ def _set_books_cell(ws, row_idx: int, col_idx: int, books: List[Tuple[str, str, 
 
 # =========================================================
 # 4) 업로드 UI
-#    - Cloud 환경 안정성을 위해 .xlsx만 받는 것을 권장
 # =========================================================
-reading_file = st.file_uploader("독서활동상황 엑셀 업로드 (.xlsx)", type=["xlsx"], key="reading")
-run = st.button("충족 여부 판단 실행", type="primary", use_container_width=True)
+reading_file = st.file_uploader("독서활동상황 엑셀 업로드 (.xlsx)", type=["xlsx"], key="reading_file")
+run = st.button("✅ 충족 여부 판단 실행", type="primary", use_container_width=True)
 
 # =========================================================
-# 5) 실행
+# 5) 버튼 1회성 문제 해결(요청 2 반영): 결과를 session_state에 저장
 # =========================================================
-if run:
-    if not reading_file:
-        st.error("독서활동상황 파일을 업로드해 주세요.")
-        st.stop()
+if "analysis" not in st.session_state:
+    st.session_state.analysis = None
+if "analysis_id" not in st.session_state:
+    st.session_state.analysis_id = None
 
-    filename = getattr(reading_file, "name", "")
+current_id = None
+if reading_file is not None:
+    current_id = f"{getattr(reading_file, 'name', '')}:{getattr(reading_file, 'size', '')}"
+
+# 업로드 파일이 바뀌면(분석 결과와 불일치 방지) 결과 초기화
+if st.session_state.analysis is not None and current_id and st.session_state.analysis_id != current_id:
+    st.session_state.analysis = None
+    st.session_state.analysis_id = None
+    for k in ["cb_11", "cb_12", "cb_21", "cb_22", "cb_init_for_id"]:
+        if k in st.session_state:
+            del st.session_state[k]
+    st.info("업로드 파일이 변경되었습니다. 실행 버튼을 다시 눌러 분석을 갱신해 주세요.")
+
+# =========================================================
+# 6) 분석 실행(버튼 눌렀을 때만 계산)
+# =========================================================
+def _analyze(uploaded) -> Dict[str, object]:
+    filename = getattr(uploaded, "name", "")
     grade, cls, gc_text_raw = _extract_grade_class_from_filename_with_raw(filename)
 
-    # 독서활동 파일 읽기
-    try:
-        xls = pd.ExcelFile(reading_file, engine="openpyxl")
-        sheet = xls.sheet_names[0]
-        df_raw_top = xls.parse(sheet_name=sheet, header=None, dtype=str)
-        if grade is None or cls is None:
-            g2, c2 = _parse_grade_class_from_sheet_top(df_raw_top)
-            grade = grade if grade is not None else g2
-            cls = cls if cls is not None else c2
-            if grade is not None and cls is not None:
-                gc_text_raw = f"{grade}-{cls}"
-    except Exception as e:
-        st.error(f"독서활동 파일 읽기 중 오류: {e}")
-        st.stop()
+    xls = pd.ExcelFile(uploaded, engine="openpyxl")
+    sheet = xls.sheet_names[0]
+    df_raw_top = xls.parse(sheet_name=sheet, header=None, dtype=str)
+
+    if grade is None or cls is None:
+        g2, c2 = _parse_grade_class_from_sheet_top(df_raw_top)
+        grade = grade if grade is not None else g2
+        cls = cls if cls is not None else c2
+        if grade is not None and cls is not None:
+            gc_text_raw = f"{grade}-{cls}"
 
     gc_text = gc_text_raw if gc_text_raw else "학년반미인식"
-    if grade is None or cls is None:
-        st.warning("학년·반을 인식하지 못했습니다. 파일명에 `2-10` 형태를 포함해 주세요.")
 
-    # 내장 필독서 로드
-    try:
-        req_2024_map = _load_required_books_from_repo(str(REQUIRED_2024_PATH))
-        req_2025_map = _load_required_books_from_repo(str(REQUIRED_2025_PATH))
-    except Exception as e:
-        st.error(f"내장 필독서 파일 로드 중 오류: {e}")
-        st.caption(f"확인 경로: {REQUIRED_2024_PATH.resolve()}")
-        st.caption(f"확인 경로: {REQUIRED_2025_PATH.resolve()}")
-        st.stop()
+    req_2024_map = _load_required_books_from_repo(str(REQUIRED_2024_PATH))
+    req_2025_map = _load_required_books_from_repo(str(REQUIRED_2025_PATH))
 
-    # 독서활동 테이블 로드 + 컬럼 매핑
-    try:
-        df = _load_reading_table(xls, sheet)
+    df = _load_reading_table(xls, sheet)
 
-        num_col = _pick_col(df, ["번호"])
-        name_col = _pick_col(df, ["성명", "이름"])
-        last_col = _pick_col(df, ["성"])
-        first_col = _pick_col(df, ["명"])
-        year_col = _pick_col(df, ["학년도"])
-        sem_col = _pick_col(df, ["학기"])
-        reading_col = _pick_col(df, ["독서활동상황", "독서활동 상황", "독서활동", "독서"])
+    num_col = _pick_col(df, ["번호"])
+    name_col = _pick_col(df, ["성명", "이름"])
+    last_col = _pick_col(df, ["성"])
+    first_col = _pick_col(df, ["명"])
+    year_col = _pick_col(df, ["학년도"])
+    sem_col = _pick_col(df, ["학기"])
+    reading_col = _pick_col(df, ["독서활동상황", "독서활동 상황", "독서활동", "독서"])
 
-        if not num_col:
-            raise ValueError("독서활동 파일에서 '번호' 컬럼을 찾지 못했습니다.")
-        if not sem_col:
-            raise ValueError("독서활동 파일에서 '학기' 컬럼을 찾지 못했습니다.")
-        if not reading_col:
-            raise ValueError("독서활동 파일에서 '독서활동상황' 컬럼을 찾지 못했습니다.")
+    if not num_col:
+        raise ValueError("독서활동 파일에서 '번호' 컬럼을 찾지 못했습니다.")
+    if not sem_col:
+        raise ValueError("독서활동 파일에서 '학기' 컬럼을 찾지 못했습니다.")
+    if not reading_col:
+        raise ValueError("독서활동 파일에서 '독서활동상황' 컬럼을 찾지 못했습니다.")
 
-        # 학년도 컬럼이 없으면 출력일로 추정(기본 2025)
-        if not year_col:
-            inferred_year = _infer_academic_year_from_print_date(df_raw_top) or 2025
-            df["__학년도__"] = str(inferred_year)
-            year_col = "__학년도__"
-            st.warning(f"학년도 컬럼이 없어 '{inferred_year}학년도'로 자동 간주했습니다.")
+    if not year_col:
+        inferred_year = _infer_academic_year_from_print_date(df_raw_top) or 2025
+        df["__학년도__"] = str(inferred_year)
+        year_col = "__학년도__"
 
-        # 이름 컬럼 구성(성/명 분리 대응)
-        if not name_col:
-            if last_col and first_col:
-                df["__이름__"] = (
-                    df[last_col].fillna("").astype(str).str.strip()
-                    + df[first_col].fillna("").astype(str).str.strip()
-                )
-                name_col = "__이름__"
-            else:
-                raise ValueError("독서활동 파일에서 '성명/이름' 컬럼을 찾지 못했습니다.")
+    if not name_col:
+        if last_col and first_col:
+            df["__이름__"] = df[last_col].fillna("").astype(str).str.strip() + df[first_col].fillna("").astype(str).str.strip()
+            name_col = "__이름__"
+        else:
+            raise ValueError("독서활동 파일에서 '성명/이름' 컬럼을 찾지 못했습니다.")
 
-        # 영역 분리 행이 많으므로 ffill
-        df[num_col] = df[num_col].ffill()
-        df[name_col] = df[name_col].ffill()
-        df[year_col] = df[year_col].ffill()
-        df[sem_col] = df[sem_col].ffill()
+    df[num_col] = df[num_col].ffill()
+    df[name_col] = df[name_col].ffill()
+    df[year_col] = df[year_col].ffill()
+    df[sem_col] = df[sem_col].ffill()
 
-        df2 = df[[num_col, name_col, year_col, sem_col, reading_col]].copy()
-        df2.columns = ["번호", "이름", "학년도", "학기", "독서활동상황"]
+    df2 = df[[num_col, name_col, year_col, sem_col, reading_col]].copy()
+    df2.columns = ["번호", "이름", "학년도", "학기", "독서활동상황"]
+    df2["번호"] = df2["번호"].astype(str).str.extract(r"(\d+)")[0]
+    df2 = df2.dropna(subset=["번호", "이름", "학년도", "학기"]).copy()
 
-        df2["번호"] = df2["번호"].astype(str).str.extract(r"(\d+)")[0]
-        df2 = df2.dropna(subset=["번호", "이름", "학년도", "학기"]).copy()
-
-    except Exception as e:
-        st.error(f"독서활동 파일 처리 중 오류: {e}")
-        st.stop()
-
-    # (학생×학년도×학기) 단위로 책 합산 + 학기 내 유사중복 제거
     groups = []
     for (num, name, year, sem), g in df2.groupby(["번호", "이름", "학년도", "학기"], dropna=False):
         all_books: List[Tuple[str, str]] = []
@@ -637,10 +576,9 @@ if run:
         )
 
     groups_sorted = sorted(groups, key=lambda x: (x["학번"], _semester_sort_key(x["학년도"], x["학기"]), x["번호"]))
-
     seen_by_student: Dict[str, List[dict]] = {}
-    output_rows = []
 
+    output_rows = []
     for item in groups_sorted:
         sid = item["학번"]
         student_key = sid or f"NOID-{item['번호']}-{item['이름']}"
@@ -658,7 +596,6 @@ if run:
         for (t, a, reason) in item["_dup_in_group"]:
             dup_remarks.append(f"{t}({a}) 중복[{reason}]")
 
-        # 학생 전체 기준 유사중복 제거
         for (t, a) in item["_books_raw"]:
             hit = _find_duplicate_against_seen(t, a, seen_by_student[student_key])
             if hit:
@@ -670,7 +607,6 @@ if run:
             seen_by_student[student_key].append({"title": t, "author": a})
             included.append((t, a))
 
-        # 필독 판정
         books_for_cell: List[Tuple[str, str, bool]] = []
         required_count = 0
 
@@ -743,239 +679,284 @@ if run:
             }
         )
 
-    # =====================================================
-    # 요약: 기준 학기 선택(파일 존재 학기 자동 체크)
-    # =====================================================
-    def _sem_num(s: str) -> Optional[int]:
-        nums = re.findall(r"\d+", str(s))
-        if not nums:
-            return None
-        n = int(nums[0])
-        return n if n in [1, 2] else None
+    return {
+        "gc_text": gc_text,
+        "output_rows": output_rows,
+        "rich_text": RICH_TEXT_AVAILABLE,
+    }
 
-    years_all = sorted({y for y in (_safe_year_int(r["학년도"]) for r in output_rows) if y is not None})
-    base_year = years_all[0] if years_all else None
-    next_year = years_all[1] if len(years_all) >= 2 else None
-    has_second_grade = True if next_year is not None else False
 
-    available_keys: set = set()
-    for r in output_rows:
-        y = _safe_year_int(r["학년도"])
-        s = _sem_num(r["학기"])
-        if y is None or s is None:
-            continue
-        if base_year is not None and y == base_year:
-            available_keys.add(f"1{s}")
-        elif has_second_grade and next_year is not None and y == next_year:
-            available_keys.add(f"2{s}")
+if run:
+    if not reading_file:
+        st.error("독서활동상황 파일을 업로드해 주세요.")
+        st.stop()
 
-    st.subheader("총 충족 기준(학기) 선택")
-    st.caption("기본값은 업로드 파일에 존재하는 학기가 자동 선택됩니다. 필요하면 체크를 조정해 주세요.")
+    try:
+        result = _analyze(reading_file)
+        st.session_state.analysis = result
+        st.session_state.analysis_id = current_id
 
-    colA, colB = st.columns(2)
-    with colA:
-        cb_11 = st.checkbox("1학년 1학기", value=("11" in available_keys), key="cb_11")
-        cb_12 = st.checkbox("1학년 2학기", value=("12" in available_keys), key="cb_12")
-    with colB:
-        cb_21 = st.checkbox("2학년 1학기", value=("21" in available_keys), key="cb_21")
-        cb_22 = st.checkbox("2학년 2학기", value=("22" in available_keys), key="cb_22")
+        # 체크박스 초기화(새 분석 결과 기준으로 기본값 재설정)
+        for k in ["cb_11", "cb_12", "cb_21", "cb_22", "cb_init_for_id"]:
+            if k in st.session_state:
+                del st.session_state[k]
 
-    selected_keys: List[str] = []
-    if cb_11:
-        selected_keys.append("11")
-    if cb_12:
-        selected_keys.append("12")
-    if cb_21:
-        selected_keys.append("21")
-    if cb_22:
-        selected_keys.append("22")
+        st.success("분석이 완료되었습니다. 아래에서 학기 기준을 조정할 수 있습니다.")
+    except Exception as e:
+        st.error(f"분석 중 오류: {e}")
+        st.stop()
 
+# =========================================================
+# 7) 결과 렌더링(버튼을 다시 누르지 않아도 유지됨)  ← 요청 2 핵심
+# =========================================================
+analysis = st.session_state.analysis
+if analysis is None:
+    st.stop()
+
+output_rows: List[dict] = analysis["output_rows"]  # type: ignore
+gc_text: str = analysis["gc_text"]  # type: ignore
+
+def _sem_num(s: str) -> Optional[int]:
+    nums = re.findall(r"\d+", str(s))
+    if not nums:
+        return None
+    n = int(nums[0])
+    return n if n in [1, 2] else None
+
+years_all = sorted({y for y in (_safe_year_int(r["학년도"]) for r in output_rows) if y is not None})
+base_year = years_all[0] if years_all else None
+next_year = years_all[1] if len(years_all) >= 2 else None
+has_second_grade = True if next_year is not None else False
+
+# 파일에 존재하는 학기 수집: "11","12","21","22"
+available_keys: set = set()
+for r in output_rows:
+    y = _safe_year_int(r["학년도"])
+    s = _sem_num(r["학기"])
+    if y is None or s is None:
+        continue
+    if base_year is not None and y == base_year:
+        available_keys.add(f"1{s}")
+    elif has_second_grade and next_year is not None and y == next_year:
+        available_keys.add(f"2{s}")
+
+# 체크박스 기본값 1회 초기화
+init_key = st.session_state.analysis_id
+if st.session_state.get("cb_init_for_id") != init_key:
+    st.session_state["cb_11"] = ("11" in available_keys)
+    st.session_state["cb_12"] = ("12" in available_keys)
+    st.session_state["cb_21"] = ("21" in available_keys)
+    st.session_state["cb_22"] = ("22" in available_keys)
+    st.session_state["cb_init_for_id"] = init_key
+
+st.subheader("총 충족 기준(학기) 선택")
+st.caption("체크를 바꿔도 결과 화면이 사라지지 않으며, 총 충족 여부만 재계산됩니다.")
+
+colA, colB = st.columns(2)
+with colA:
+    st.checkbox("1학년 1학기", key="cb_11")
+    st.checkbox("1학년 2학기", key="cb_12")
+with colB:
+    st.checkbox("2학년 1학기", key="cb_21")
+    st.checkbox("2학년 2학기", key="cb_22")
+
+selected_keys: List[str] = []
+if st.session_state.get("cb_11"):
+    selected_keys.append("11")
+if st.session_state.get("cb_12"):
+    selected_keys.append("12")
+if st.session_state.get("cb_21"):
+    selected_keys.append("21")
+if st.session_state.get("cb_22"):
+    selected_keys.append("22")
+
+if len(selected_keys) == 0:
+    st.warning("총 충족 여부 기준 학기가 선택되지 않았습니다. 총 충족 여부는 '판정 보류'로 표시됩니다.")
+
+# 학생별 학기별 O/X/- 구성
+summary_map: Dict[str, dict] = {}
+
+def _default_sem_value(k: str) -> str:
+    return "X" if k in available_keys else "-"
+
+for r in output_rows:
+    sid = r["학번"]
+    key = sid or f"NOID-{r['이름']}"
+    if key not in summary_map:
+        summary_map[key] = {
+            "학번": sid,
+            "이름": r["이름"],
+            "11": _default_sem_value("11"),
+            "12": _default_sem_value("12"),
+            "21": _default_sem_value("21"),
+            "22": _default_sem_value("22"),
+        }
+
+    y = _safe_year_int(r["학년도"])
+    s = _sem_num(r["학기"])
+    if y is None or s is None:
+        continue
+
+    mark = "O" if r["충족 여부"] == "충족" else "X"
+    if base_year is not None and y == base_year:
+        summary_map[key][f"1{s}"] = mark
+    elif has_second_grade and next_year is not None and y == next_year:
+        summary_map[key][f"2{s}"] = mark
+
+def _sort_key_summary(item: dict):
+    sid = item.get("학번", "") or ""
+    return (0, sid) if sid else (1, item.get("이름", ""))
+
+summary_rows = sorted(summary_map.values(), key=_sort_key_summary)
+
+summary_final = []
+for i, row in enumerate(summary_rows, start=1):
     if len(selected_keys) == 0:
-        st.warning("총 충족 여부 기준 학기가 선택되지 않았습니다. 총 충족 여부는 '판정 보류'로 표시됩니다.")
+        total = "판정 보류"
+    else:
+        ok = True
+        for k in selected_keys:
+            v = row.get(k, "-")
+            if v != "O":
+                ok = False
+                break
+        total = "충족" if ok else "미충족"
 
-    summary_map: Dict[str, dict] = {}
-
-    def _default_sem_value(k: str) -> str:
-        return "X" if k in available_keys else "-"
-
-    for r in output_rows:
-        sid = r["학번"]
-        key = sid or f"NOID-{r['이름']}"
-        if key not in summary_map:
-            summary_map[key] = {
-                "학번": sid,
-                "이름": r["이름"],
-                "11": _default_sem_value("11"),
-                "12": _default_sem_value("12"),
-                "21": _default_sem_value("21"),
-                "22": _default_sem_value("22"),
-            }
-
-        y = _safe_year_int(r["학년도"])
-        s = _sem_num(r["학기"])
-        if y is None or s is None:
-            continue
-
-        mark = "O" if r["충족 여부"] == "충족" else "X"
-        if base_year is not None and y == base_year:
-            summary_map[key][f"1{s}"] = mark
-        elif has_second_grade and next_year is not None and y == next_year:
-            summary_map[key][f"2{s}"] = mark
-
-    def _sort_key_summary(item: dict):
-        sid = item.get("학번", "") or ""
-        return (0, sid) if sid else (1, item.get("이름", ""))
-
-    summary_rows = sorted(summary_map.values(), key=_sort_key_summary)
-
-    summary_final = []
-    for i, row in enumerate(summary_rows, start=1):
-        if len(selected_keys) == 0:
-            total = "판정 보류"
-        else:
-            ok = True
-            for k in selected_keys:
-                v = row.get(k, "-")
-                if v != "O":
-                    ok = False
-                    break
-            total = "충족" if ok else "미충족"
-
-        summary_final.append(
-            {
-                "연번": i,
-                "학번": row["학번"],
-                "이름": row["이름"],
-                "1학년 1학기 충족여부": row["11"],
-                "1학년 2학기 충족여부": row["12"],
-                "2학년 1학기 충족여부": row["21"],
-                "2학년 2학기 충족여부": row["22"],
-                "총 충족여부": total,
-            }
-        )
-
-    df_summary = pd.DataFrame(
-        summary_final,
-        columns=[
-            "연번",
-            "학번",
-            "이름",
-            "1학년 1학기 충족여부",
-            "1학년 2학기 충족여부",
-            "2학년 1학기 충족여부",
-            "2학년 2학기 충족여부",
-            "총 충족여부",
-        ],
+    summary_final.append(
+        {
+            "연번": i,
+            "학번": row["학번"],
+            "이름": row["이름"],
+            "1학년 1학기 충족여부": row["11"],
+            "1학년 2학기 충족여부": row["12"],
+            "2학년 1학기 충족여부": row["21"],
+            "2학년 2학기 충족여부": row["22"],
+            "총 충족여부": total,
+        }
     )
 
-    st.subheader("요약 미리보기")
-    st.dataframe(df_summary.head(20), use_container_width=True)
+df_summary = pd.DataFrame(
+    summary_final,
+    columns=[
+        "연번",
+        "학번",
+        "이름",
+        "1학년 1학기 충족여부",
+        "1학년 2학기 충족여부",
+        "2학년 1학기 충족여부",
+        "2학년 2학기 충족여부",
+        "총 충족여부",
+    ],
+)
 
-    st.subheader("상세 미리보기(상위 20행)")
-    df_detail_preview = pd.DataFrame(
+st.subheader("요약 미리보기")
+st.dataframe(df_summary.head(20), use_container_width=True)
+
+st.subheader("상세 미리보기(상위 20행)")
+df_detail_preview = pd.DataFrame(
+    [
+        {
+            "연번": i,
+            "학번": r["학번"],
+            "이름": r["이름"],
+            "학년도": r["학년도"],
+            "학기": r["학기"],
+            "총권수": r["총권수"],
+            "필독서 권수": r["필독서 권수"],
+            "충족 여부": r["충족 여부"],
+            "비고": r["비고"],
+        }
+        for i, r in enumerate(output_rows, start=1)
+    ]
+)
+st.dataframe(df_detail_preview.head(20), use_container_width=True)
+
+# =====================================================
+# 엑셀 생성(요약 시트가 체크박스 선택 결과를 반영하도록 매 실행마다 재생성)
+# =====================================================
+wb = Workbook()
+
+ws_sum = wb.active
+ws_sum.title = "요약"
+sum_headers = list(df_summary.columns)
+ws_sum.append(sum_headers)
+for _, row in df_summary.iterrows():
+    ws_sum.append([row[h] for h in sum_headers])
+
+header_font = Font(bold=True)
+for c in range(1, len(sum_headers) + 1):
+    cell = ws_sum.cell(row=1, column=c)
+    cell.font = header_font
+    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+ws_sum.column_dimensions["A"].width = 6
+ws_sum.column_dimensions["B"].width = 10
+ws_sum.column_dimensions["C"].width = 10
+ws_sum.column_dimensions["D"].width = 18
+ws_sum.column_dimensions["E"].width = 18
+ws_sum.column_dimensions["F"].width = 18
+ws_sum.column_dimensions["G"].width = 18
+ws_sum.column_dimensions["H"].width = 12
+
+ws = wb.create_sheet(title="상세")
+detail_headers = ["연번", "학번", "이름", "학년도", "학기", "도서명", "총권수", "필독서 권수", "충족 여부", "비고"]
+ws.append(detail_headers)
+
+for idx, r in enumerate(output_rows, start=2):
+    ws.append(
         [
-            {
-                "연번": i,
-                "학번": r["학번"],
-                "이름": r["이름"],
-                "학년도": r["학년도"],
-                "학기": r["학기"],
-                "총권수": r["총권수"],
-                "필독서 권수": r["필독서 권수"],
-                "충족 여부": r["충족 여부"],
-                "비고": r["비고"],
-            }
-            for i, r in enumerate(output_rows, start=1)
+            idx - 1,
+            r["학번"],
+            r["이름"],
+            r["학년도"],
+            r["학기"],
+            "",
+            r["총권수"],
+            r["필독서 권수"],
+            r["충족 여부"],
+            r["비고"],
         ]
     )
-    st.dataframe(df_detail_preview.head(20), use_container_width=True)
 
-    # =====================================================
-    # 엑셀 생성(요약 시트 먼저)
-    # =====================================================
-    wb = Workbook()
+    _set_books_cell(ws, row_idx=idx, col_idx=6, books=r["도서목록_표시"])
 
-    ws_sum = wb.active
-    ws_sum.title = "요약"
-    sum_headers = list(df_summary.columns)
-    ws_sum.append(sum_headers)
-    for _, row in df_summary.iterrows():
-        ws_sum.append([row[h] for h in sum_headers])
+    note_cell = ws.cell(row=idx, column=10)
+    note_cell.alignment = Alignment(wrap_text=True, vertical="top")
+    note_text = str(r.get("비고", "") or "")
+    if "중복" in note_text:
+        note_cell.font = Font(color="FF0000")
 
-    header_font = Font(bold=True)
-    for c in range(1, len(sum_headers) + 1):
-        cell = ws_sum.cell(row=1, column=c)
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+for c in range(1, len(detail_headers) + 1):
+    cell = ws.cell(row=1, column=c)
+    cell.font = header_font
+    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    ws_sum.column_dimensions["A"].width = 6
-    ws_sum.column_dimensions["B"].width = 10
-    ws_sum.column_dimensions["C"].width = 10
-    ws_sum.column_dimensions["D"].width = 18
-    ws_sum.column_dimensions["E"].width = 18
-    ws_sum.column_dimensions["F"].width = 18
-    ws_sum.column_dimensions["G"].width = 18
-    ws_sum.column_dimensions["H"].width = 12
+ws.column_dimensions["A"].width = 6
+ws.column_dimensions["B"].width = 10
+ws.column_dimensions["C"].width = 10
+ws.column_dimensions["D"].width = 10
+ws.column_dimensions["E"].width = 8
+ws.column_dimensions["F"].width = 70
+ws.column_dimensions["G"].width = 8
+ws.column_dimensions["H"].width = 12
+ws.column_dimensions["I"].width = 10
+ws.column_dimensions["J"].width = 55
 
-    ws = wb.create_sheet(title="상세")
-    detail_headers = ["연번", "학번", "이름", "학년도", "학기", "도서명", "총권수", "필독서 권수", "충족 여부", "비고"]
-    ws.append(detail_headers)
+for rr in range(2, ws.max_row + 1):
+    ws.cell(row=rr, column=6).alignment = Alignment(wrap_text=True, vertical="top")
 
-    for idx, r in enumerate(output_rows, start=2):
-        ws.append(
-            [
-                idx - 1,
-                r["학번"],
-                r["이름"],
-                r["학년도"],
-                r["학기"],
-                "",
-                r["총권수"],
-                r["필독서 권수"],
-                r["충족 여부"],
-                r["비고"],
-            ]
-        )
+output = BytesIO()
+wb.save(output)
+output.seek(0)
 
-        _set_books_cell(ws, row_idx=idx, col_idx=6, books=r["도서목록_표시"])
+out_filename = f"{gc_text}_독서가_결과.xlsx"
+st.download_button(
+    label="📥 결과 엑셀 다운로드",
+    data=output,
+    file_name=out_filename,
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True,
+)
 
-        note_cell = ws.cell(row=idx, column=10)
-        note_cell.alignment = Alignment(wrap_text=True, vertical="top")
-        note_text = str(r.get("비고", "") or "")
-        if "중복" in note_text:
-            note_cell.font = Font(color="FF0000")
-
-    for c in range(1, len(detail_headers) + 1):
-        cell = ws.cell(row=1, column=c)
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    ws.column_dimensions["A"].width = 6
-    ws.column_dimensions["B"].width = 10
-    ws.column_dimensions["C"].width = 10
-    ws.column_dimensions["D"].width = 10
-    ws.column_dimensions["E"].width = 8
-    ws.column_dimensions["F"].width = 70
-    ws.column_dimensions["G"].width = 8
-    ws.column_dimensions["H"].width = 12
-    ws.column_dimensions["I"].width = 10
-    ws.column_dimensions["J"].width = 55
-
-    for rr in range(2, ws.max_row + 1):
-        ws.cell(row=rr, column=6).alignment = Alignment(wrap_text=True, vertical="top")
-
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-
-    out_filename = f"{gc_text}_{PAGE_TITLE}_결과.xlsx"
-    st.download_button(
-        label="결과 엑셀 다운로드",
-        data=output,
-        file_name=out_filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
-
-    if not RICH_TEXT_AVAILABLE:
-        st.warning("현재 환경에서 '셀 내부 일부 굵게'가 제한되어, 필독서는 ★ 표시로 강조됩니다.")
+if not RICH_TEXT_AVAILABLE:
+    st.warning("현재 환경에서 '셀 내부 일부 굵게'가 제한되어, 필독서는 ★ 표시로 강조됩니다.")
